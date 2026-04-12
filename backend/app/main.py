@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
@@ -13,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import cache
+from app import database
 from app.ai_router import (
     get_estimate,
     get_feed,
@@ -37,6 +39,13 @@ from app.models import (
 
 DEBUG = os.getenv("DEBUG", "0") == "1"
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await database.init_pool()
+    yield
+    await database.close_pool()
+
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -50,6 +59,7 @@ app = FastAPI(
     title="AI Job Countdown API",
     description="Estimates when AI will significantly disrupt a given job role.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -114,7 +124,14 @@ async def _detect_geo(ip: str) -> dict:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    db_status = "unavailable"
+    try:
+        pool = database.get_pool()
+        await pool.fetchval("SELECT 1")
+        db_status = "ok"
+    except Exception:
+        pass
+    return {"status": "ok", "db": db_status}
 
 
 # ── Geo endpoint ──
