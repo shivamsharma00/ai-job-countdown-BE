@@ -2,6 +2,7 @@
 
 import logging
 import os
+from typing import Optional
 
 import app.claude_service as _claude
 import app.openai_service as _openai
@@ -35,8 +36,15 @@ async def _call(fn_name: str, *args, **kwargs):
     return await getattr(_PROVIDERS[FALLBACK], fn_name)(*args, **kwargs)
 
 
-async def get_estimate(role, location, company_size, company_name, tasks, ai_usage):
-    return await _call("get_estimate", role, location, company_size, company_name, tasks, ai_usage)
+async def get_estimate(
+    role, location, company_size, company_name, tasks, ai_usage,
+    computed_scores: Optional[dict] = None,
+):
+    return await _call(
+        "get_estimate",
+        role, location, company_size, company_name, tasks, ai_usage,
+        computed_scores=computed_scores,
+    )
 
 
 async def get_feed(role, location, company_size, tasks):

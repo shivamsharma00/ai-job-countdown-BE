@@ -1,5 +1,7 @@
 """Pydantic models for API request and response schemas."""
 
+from typing import Optional
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.sanitize import sanitize_text
@@ -104,12 +106,37 @@ class Tip(BaseModel):
     text: str
 
 
+class OccupationMatch(BaseModel):
+    soc_code: str
+    title: str
+    matched: bool
+
+
+class DataSources(BaseModel):
+    eloundou_alpha: Optional[float] = None
+    eloundou_beta: Optional[float] = None
+    eloundou_score: float
+    eloundou_available: bool
+    aioe_raw: Optional[float] = None
+    aioe_normalized: float
+    aioe_available: bool
+    task_exposure: Optional[float] = None
+    tasks_analyzed: int
+    company_modifier: float
+    ai_usage_modifier: float
+    bls_employment_national: Optional[int] = None
+    bls_median_wage_national: Optional[int] = None
+    final_exposure: float
+
+
 class EstimateResponse(BaseModel):
     years: int = Field(ge=1, le=30)
     risk: str = Field(pattern=r"^(critical|high|moderate|low)$")
     description: str
     factors: list[Factor]
     tips: list[Tip]
+    occupation: Optional[OccupationMatch] = None
+    data_sources: Optional[DataSources] = None
 
 
 class FeedItem(BaseModel):

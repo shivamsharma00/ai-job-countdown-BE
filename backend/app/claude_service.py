@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from typing import Optional
 
 import httpx
 
@@ -11,11 +12,13 @@ logger = logging.getLogger(__name__)
 from app.ai_utils import _parse_json
 from app.prompts.prompts import (
     ESTIMATE_SYSTEM_PROMPT,
+    ESTIMATE_NARRATIVE_SYSTEM_PROMPT,
     FEED_SYSTEM_PROMPT,
     ROLE_SUGGESTIONS_SYSTEM_PROMPT,
     CITY_SUGGESTIONS_SYSTEM_PROMPT,
     TASK_SUGGESTIONS_SYSTEM_PROMPT,
     build_estimate_user_prompt,
+    build_narrative_user_prompt,
     build_feed_user_prompt,
     build_role_suggestions_prompt,
     build_city_suggestions_prompt,
@@ -24,7 +27,10 @@ from app.prompts.prompts import (
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-4-6"
+# Haiku for narrative-only calls: much cheaper, sufficient for prose + tips
+HAIKU_MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 2048
+NARRATIVE_MAX_TOKENS = 900   # description + 3 tips only
 SUGGESTION_MAX_TOKENS = 768
 
 
@@ -60,25 +66,56 @@ async def get_estimate(
     company_name: str,
     tasks: list[str],
     ai_usage: int,
+    computed_scores: Optional[dict] = None,
 ) -> dict:
-    """Call Claude to generate a job disruption estimate."""
-    user_msg = build_estimate_user_prompt(
-        role=role,
-        location=location,
-        company_size=company_size,
-        company_name=company_name,
-        tasks=tasks,
-        ai_usage=ai_usage,
-    )
+    """
+    Generate a job disruption estimate.
 
-    payload = {
-        "model": MODEL,
-        "max_tokens": MAX_TOKENS,
-        "system": ESTIMATE_SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": user_msg}],
-    }
+    If computed_scores is provided (DB scoring succeeded) we make ONE cheap
+    Haiku call that only writes description + tips — scores are already computed.
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    If computed_scores is None (DB unavailable) we fall back to one Sonnet call
+    where the LLM computes everything from scratch.
+    """
+    if computed_scores is not None:
+        # ── Fast / cheap path: DB did the math, LLM writes the prose ──
+        user_msg = build_narrative_user_prompt(
+            role=role,
+            location=location,
+            company_size=company_size,
+            company_name=company_name,
+            tasks=tasks,
+            ai_usage=ai_usage,
+            computed=computed_scores,
+        )
+        payload = {
+            "model": HAIKU_MODEL,
+            "max_tokens": NARRATIVE_MAX_TOKENS,
+            "temperature": 0.3,
+            "system": ESTIMATE_NARRATIVE_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_msg}],
+        }
+        timeout = 30
+    else:
+        # ── Fallback path: LLM computes everything ──
+        user_msg = build_estimate_user_prompt(
+            role=role,
+            location=location,
+            company_size=company_size,
+            company_name=company_name,
+            tasks=tasks,
+            ai_usage=ai_usage,
+        )
+        payload = {
+            "model": MODEL,
+            "max_tokens": MAX_TOKENS,
+            "temperature": 0.3,
+            "system": ESTIMATE_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_msg}],
+        }
+        timeout = 60
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(ANTHROPIC_API_URL, json=payload, headers=_headers())
         if not resp.is_success:
             body = resp.text
@@ -89,7 +126,17 @@ async def get_estimate(
                 detail = body
             raise RuntimeError(f"Anthropic API {resp.status_code}: {detail}")
         text = _extract_text(resp.json())
-        return _parse_json(text)
+        narrative = _parse_json(text)
+
+    if computed_scores is not None:
+        # Merge: DB scores + LLM narrative
+        return {
+            **computed_scores,
+            "description": narrative["description"],
+            "tips": narrative["tips"],
+        }
+    # Fallback: LLM returned everything
+    return narrative
 
 
 async def get_feed(

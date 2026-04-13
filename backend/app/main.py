@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import cache
 from app import database
+from app import scoring
 from app.ai_router import (
     get_estimate,
     get_feed,
@@ -31,6 +32,7 @@ from app.models import (
     FeedRequest,
     FeedResponse,
     GeoResponse,
+    OccupationMatch,
     RoleSuggestionsRequest,
     RoleSuggestionsResponse,
     TaskSuggestionsRequest,
@@ -239,6 +241,39 @@ async def estimate(req: EstimateRequest):
     cache_key = _estimate_cache_key(req)
 
     async def compute():
+        # ── Step 1: deterministic DB scoring ──
+        db_computed = None
+        try:
+            database.get_pool()  # raises RuntimeError if DB not ready
+            occ = await scoring.match_occupation(req.role)
+            if occ:
+                exp_data = await scoring.get_exposure_data(occ["onetsoc_code"])
+                scores = scoring.compute_scores(
+                    exp_data, req.tasks, req.company_size, req.ai_usage
+                )
+                db_computed = {
+                    "occupation": {
+                        "soc_code": occ["onetsoc_code"],
+                        "title":    occ["title"],
+                        "matched":  True,
+                    },
+                    **scores,
+                }
+                if DEBUG:
+                    logger.debug(
+                        "DB scoring succeeded: soc=%s exposure=%.3f years=%d",
+                        occ["onetsoc_code"],
+                        scores["data_sources"]["final_exposure"],
+                        scores["years"],
+                    )
+            else:
+                logger.info("No SOC match found for role=%r — using LLM fallback", req.role)
+        except RuntimeError:
+            logger.info("DB pool unavailable — using LLM-only scoring")
+        except Exception as e:
+            logger.warning("DB scoring failed (%s: %s) — falling back to LLM", type(e).__name__, e)
+
+        # ── Step 2: single LLM call ──
         return await get_estimate(
             role=req.role,
             location=req.location,
@@ -246,11 +281,12 @@ async def estimate(req: EstimateRequest):
             company_name=req.company_name,
             tasks=req.tasks,
             ai_usage=req.ai_usage,
+            computed_scores=db_computed,
         )
 
     try:
         result = await cache.get_or_compute(cache_key, compute, ttl_seconds=3600)
-        logger.info("Estimate response: %s", json.dumps(result))
+        logger.info("Estimate response: %s", json.dumps(result, default=str))
         return EstimateResponse(**result)
     except json.JSONDecodeError as e:
         logger.error("Failed to parse Claude estimate response: %s", e)

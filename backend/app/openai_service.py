@@ -95,6 +95,7 @@ async def get_estimate(
     company_name: str,
     tasks: list[str],
     ai_usage: int,
+    computed_scores=None,  # accepted but ignored; OpenAI path always does full scoring
 ) -> dict:
     """Call OpenAI to generate a job disruption estimate."""
     user_msg = build_estimate_user_prompt(
