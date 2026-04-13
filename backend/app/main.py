@@ -247,13 +247,14 @@ async def estimate(req: EstimateRequest):
             database.get_pool()  # raises RuntimeError if DB not ready
             occ = await scoring.match_occupation(req.role)
             if occ:
-                exp_data = await scoring.get_exposure_data(occ["onetsoc_code"])
+                exp_data = await scoring.get_exposure_data(occ["soc_code"])
                 scores = scoring.compute_scores(
                     exp_data, req.tasks, req.company_size, req.ai_usage
                 )
+                
                 db_computed = {
                     "occupation": {
-                        "soc_code": occ["onetsoc_code"],
+                        "soc_code": occ["soc_code"],
                         "title":    occ["title"],
                         "matched":  True,
                     },
@@ -262,7 +263,7 @@ async def estimate(req: EstimateRequest):
                 if DEBUG:
                     logger.debug(
                         "DB scoring succeeded: soc=%s exposure=%.3f years=%d",
-                        occ["onetsoc_code"],
+                        occ["soc_code"],
                         scores["data_sources"]["final_exposure"],
                         scores["years"],
                     )
