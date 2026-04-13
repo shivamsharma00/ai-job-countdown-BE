@@ -42,7 +42,7 @@ async def match_occupation(role: str) -> Optional[dict]:
 
     row = await pool.fetchrow(
         """
-        SELECT onetsoc_code, title, description,
+        SELECT soc_code, title, description,
                CASE
                    WHEN LOWER(title) = $1                   THEN 100
                    WHEN LOWER(title) LIKE '%' || $1 || '%'  THEN 80
@@ -74,7 +74,7 @@ async def get_exposure_data(onetsoc_code: str) -> dict:
     # Eloundou occupation-level exposure (923 rows)
     try:
         row = await pool.fetchrow(
-            "SELECT * FROM eloundou_exposure WHERE onetsoc_code = $1",
+            "SELECT * FROM eloundou_exposure WHERE soc_code = $1",
             onetsoc_code,
         )
         result["eloundou"] = dict(row) if row else {}
@@ -85,7 +85,7 @@ async def get_exposure_data(onetsoc_code: str) -> dict:
     # Felten AIOE score (756 rows)
     try:
         row = await pool.fetchrow(
-            "SELECT * FROM aioe_scores WHERE onetsoc_code = $1",
+            "SELECT * FROM aioe_scores WHERE soc_code = $1",
             onetsoc_code,
         )
         result["aioe"] = dict(row) if row else {}
@@ -103,10 +103,10 @@ async def get_exposure_data(onetsoc_code: str) -> dict:
                    COALESCE(r.data_value, 3.0)   AS importance
             FROM onet_tasks t
             LEFT JOIN onet_task_ratings r
-                ON  t.onetsoc_code = r.onetsoc_code
+                ON  t.soc_code = r.soc_code
                 AND t.task_id      = r.task_id
                 AND r.scale_id     = 'IM'
-            WHERE t.onetsoc_code = $1
+            WHERE t.soc_code = $1
             ORDER BY r.data_value DESC NULLS LAST
             """,
             onetsoc_code,
@@ -119,7 +119,7 @@ async def get_exposure_data(onetsoc_code: str) -> dict:
     # AIOE task-level penetration scores (17 998 rows)
     try:
         rows = await pool.fetch(
-            "SELECT * FROM aioe_task_penetration WHERE onetsoc_code = $1 LIMIT 200",
+            "SELECT * FROM aioe_task_penetration WHERE soc_code = $1 LIMIT 200",
             onetsoc_code,
         )
         result["aioe_tasks"] = [dict(r) for r in rows]
