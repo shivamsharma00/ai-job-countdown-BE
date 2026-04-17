@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import cache
 from app import database
 from app import scoring
+from app.city_data import get_city_suggestions_static
 from app.ai_router import (
     get_estimate,
     get_feed,
@@ -45,6 +46,7 @@ DEBUG = os.getenv("DEBUG", "0") == "1"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await database.init_pool()
+    await database.ensure_task_cache_table()
     yield
     await database.close_pool()
 
@@ -186,9 +188,21 @@ async def role_suggestions(req: RoleSuggestionsRequest):
 
 @app.post("/api/city-suggestions", response_model=CitySuggestionsResponse)
 async def city_suggestions(req: CitySuggestionsRequest):
-    """Return 6 city pills for the user's region."""
+    """Return 6 city pills for the user's region.
+
+    Tries a static city lookup first (no LLM cost); falls back to LLM only
+    when the city is not in the built-in database.
+    """
     if DEBUG:
         logger.debug("POST /api/city-suggestions  city=%r region=%r", req.city, req.region)
+
+    # ── Static lookup — no LLM cost ──
+    static = get_city_suggestions_static(req.city, req.region)
+    if static:
+        logger.info("City suggestions static HIT for city=%r", req.city)
+        return CitySuggestionsResponse(cities=static)
+
+    # ── LLM fallback for unrecognised cities ──
     cache_key = cache.make_key("cities", req.city, req.region)
 
     async def compute():
@@ -209,13 +223,50 @@ async def city_suggestions(req: CitySuggestionsRequest):
 
 @app.post("/api/task-suggestions", response_model=TaskSuggestionsResponse)
 async def task_suggestions(req: TaskSuggestionsRequest):
-    """Return 10 task pill suggestions for a role + company size."""
+    """Return 10 task pill suggestions for a role + company size.
+
+    Checks the persistent DB cache first, then the in-memory cache, then calls the LLM.
+    Stores new LLM results in the DB cache for future requests.
+    """
+    role_key = req.role.lower().strip()
+    size_key = req.company_size or ""
+
     if DEBUG:
         logger.debug("POST /api/task-suggestions  role=%r size=%r", req.role, req.company_size)
-    cache_key = cache.make_key("tasks", req.role.lower(), req.company_size)
+
+    # ── Step 1: Check persistent DB cache ──
+    try:
+        pool = database.get_pool()
+        row = await pool.fetchrow(
+            "SELECT tasks FROM task_suggestions_cache WHERE role_normalized = $1 AND company_size = $2",
+            role_key, size_key,
+        )
+        if row:
+            logger.info("Task suggestions DB cache HIT for role=%r size=%r", role_key, size_key)
+            return TaskSuggestionsResponse(tasks=json.loads(row["tasks"]))
+    except Exception as e:
+        logger.debug("DB task cache lookup skipped: %s", e)
+
+    # ── Step 2: In-memory cache + LLM fallback ──
+    cache_key = cache.make_key("tasks", role_key, size_key)
 
     async def compute():
         tasks = await get_task_suggestions(req.role, req.company_size)
+        # Store in DB cache for future requests
+        try:
+            p = database.get_pool()
+            await p.execute(
+                """
+                INSERT INTO task_suggestions_cache (role_normalized, company_size, tasks)
+                VALUES ($1, $2, $3::jsonb)
+                ON CONFLICT (role_normalized, company_size)
+                DO UPDATE SET tasks = EXCLUDED.tasks, created_at = NOW()
+                """,
+                role_key, size_key, json.dumps(tasks),
+            )
+            logger.info("Stored task suggestions in DB cache for role=%r size=%r", role_key, size_key)
+        except Exception as e:
+            logger.warning("Failed to store task suggestions in DB cache: %s", e)
         return {"tasks": tasks}
 
     try:

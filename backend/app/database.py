@@ -36,6 +36,25 @@ async def init_pool() -> None:
     logger.info("Database pool created (min=1, max=10)")
 
 
+async def ensure_task_cache_table() -> None:
+    """Create task_suggestions_cache table if it does not exist."""
+    if _pool is None:
+        return
+    try:
+        await _pool.execute("""
+            CREATE TABLE IF NOT EXISTS task_suggestions_cache (
+                role_normalized TEXT NOT NULL,
+                company_size    TEXT NOT NULL,
+                tasks           JSONB NOT NULL,
+                created_at      TIMESTAMPTZ DEFAULT NOW(),
+                PRIMARY KEY (role_normalized, company_size)
+            )
+        """)
+        logger.info("task_suggestions_cache table ready")
+    except Exception as e:
+        logger.warning("Could not create task_suggestions_cache: %s", e)
+
+
 async def close_pool() -> None:
     """Close the connection pool. Called once at app shutdown."""
     global _pool

@@ -115,6 +115,7 @@ class OccupationMatch(BaseModel):
 class DataSources(BaseModel):
     eloundou_alpha: Optional[float] = None
     eloundou_beta: Optional[float] = None
+    eloundou_gamma: Optional[float] = None
     eloundou_score: float
     eloundou_available: bool
     aioe_raw: Optional[float] = None
@@ -122,6 +123,7 @@ class DataSources(BaseModel):
     aioe_available: bool
     task_exposure: Optional[float] = None
     tasks_analyzed: int
+    matched_tasks: list[str] = []
     company_modifier: float
     ai_usage_modifier: float
     bls_employment_national: Optional[int] = None
@@ -132,9 +134,9 @@ class DataSources(BaseModel):
 class EstimateResponse(BaseModel):
     years: int = Field(ge=1, le=30)
     risk: str = Field(pattern=r"^(critical|high|moderate|low)$")
-    description: str
+    description: Optional[str] = None
     factors: list[Factor]
-    tips: list[Tip]
+    tips: list[Tip] = []
     occupation: Optional[OccupationMatch] = None
     data_sources: Optional[DataSources] = None
 
